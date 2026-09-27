@@ -51,6 +51,36 @@ const float* LlamaModel::w(const std::string& name) const {
     return t.as<float>();
 }
 
+void LlamaModel::quantize_into_as(const std::string& qname, const std::string& wname) {
+    const TensorInfo& t = loader_.get(wname);
+    if (t.dtype != DType::F32 || t.shape.size() != 2)
+        throw std::runtime_error("model: cannot quantize '" + wname + "'");
+    QT qt;
+    qt.rows = static_cast<int>(t.shape[0]);
+    qt.cols = static_cast<int>(t.shape[1]);
+    qt.q.resize(static_cast<size_t>(qt.rows) * qt.cols);
+    qt.s.resize(qt.rows);
+    quantize_i8(t.as<float>(), qt.rows, qt.cols, qt.q.data(), qt.s.data());
+    qmap_[qname] = std::move(qt);
+}
+
+void LlamaModel::quantize_into(const std::string& name) {
+    quantize_into_as(name, name);
+}
+
+void LlamaModel::matvec_w(const std::string& name, const float* x, float* y, int rows,
+                           int cols) const {
+    if (quant_ == QuantMode::F32) {
+        matvec(w(name), x, y, rows, cols);
+        return;
+    }
+    auto it = qmap_.find(name);
+    if (it == qmap_.end())
+        throw std::runtime_error("model: no quantized weights for '" + name + "'");
+    const QT& qt = it->second;
+    matvec_i8(qt.q.data(), qt.s.data(), x, y, qt.rows, qt.cols);
+}
+
 void LlamaModel::load(const std::string& weights_path, const std::string& config_path) {
     cfg_ = ModelConfig::from_hf_json(config_path);
     loader_.open(weights_path);
@@ -59,6 +89,25 @@ void LlamaModel::load(const std::string& weights_path, const std::string& config
     loader_.get("model.embed_tokens.weight");
     loader_.get(layer(0, "self_attn.q_proj.weight"));
     loader_.get("model.norm.weight");
+
+    if (quant_ == QuantMode::I8) {
+        // Quantize every matvec weight matrix. The embedding table stays fp32
+        // (lookup path), but the lm head needs a quantized copy of it when
+        // embeddings are tied.
+        for (int l = 0; l < cfg_.n_layers; ++l) {
+            quantize_into(layer(l, "self_attn.q_proj.weight"));
+            quantize_into(layer(l, "self_attn.k_proj.weight"));
+            quantize_into(layer(l, "self_attn.v_proj.weight"));
+            quantize_into(layer(l, "self_attn.o_proj.weight"));
+            quantize_into(layer(l, "mlp.gate_proj.weight"));
+            quantize_into(layer(l, "mlp.up_proj.weight"));
+            quantize_into(layer(l, "mlp.down_proj.weight"));
+        }
+        if (loader_.has("lm_head.weight"))
+            quantize_into("lm_head.weight");
+        else
+            quantize_into_as("lm_head.weight", "model.embed_tokens.weight");
+    }
 
     const size_t kv_elems =
         static_cast<size_t>(cfg_.max_seq_len) * cfg_.n_kv_heads * cfg_.head_dim;
@@ -120,9 +169,9 @@ void LlamaModel::forward_debug(int token, int pos, float* logits_out,
     for (int l = 0; l < cfg_.n_layers; ++l) {
         // attention block
         rmsnorm(x_.data(), w(layer(l, "input_layernorm.weight")), xb_.data(), dim, cfg_.norm_eps);
-        matvec(w(layer(l, "self_attn.q_proj.weight")), xb_.data(), q_.data(), n_h * hd, dim);
-        matvec(w(layer(l, "self_attn.k_proj.weight")), xb_.data(), k_.data(), n_kv * hd, dim);
-        matvec(w(layer(l, "self_attn.v_proj.weight")), xb_.data(), v_.data(), n_kv * hd, dim);
+        matvec_w(layer(l, "self_attn.q_proj.weight"), xb_.data(), q_.data(), n_h * hd, dim);
+        matvec_w(layer(l, "self_attn.k_proj.weight"), xb_.data(), k_.data(), n_kv * hd, dim);
+        matvec_w(layer(l, "self_attn.v_proj.weight"), xb_.data(), v_.data(), n_kv * hd, dim);
         rope(q_.data(), k_.data(), n_h, n_kv, hd, pos, cfg_.rope_theta);
 
         // append k/v to cache, then attend over positions 0..pos (causal by construction)
@@ -154,17 +203,17 @@ void LlamaModel::forward_debug(int token, int pos, float* logits_out,
                 out[d] = s;
             }
         }
-        matvec(w(layer(l, "self_attn.o_proj.weight")), xb_.data(), xb2_.data(), dim, n_h * hd);
+        matvec_w(layer(l, "self_attn.o_proj.weight"), xb_.data(), xb2_.data(), dim, n_h * hd);
         for (int i = 0; i < dim; ++i) x_[i] += xb2_[i];
 
         // SwiGLU MLP block
         rmsnorm(x_.data(), w(layer(l, "post_attention_layernorm.weight")), xb_.data(), dim,
                 cfg_.norm_eps);
-        matvec(w(layer(l, "mlp.gate_proj.weight")), xb_.data(), hb_.data(), ffn, dim);
-        matvec(w(layer(l, "mlp.up_proj.weight")), xb_.data(), hb2_.data(), ffn, dim);
+        matvec_w(layer(l, "mlp.gate_proj.weight"), xb_.data(), hb_.data(), ffn, dim);
+        matvec_w(layer(l, "mlp.up_proj.weight"), xb_.data(), hb2_.data(), ffn, dim);
         vec_silu(hb_.data(), ffn);
         vec_mul(hb_.data(), hb2_.data(), hb_.data(), ffn);
-        matvec(w(layer(l, "mlp.down_proj.weight")), hb_.data(), xb_.data(), dim, ffn);
+        matvec_w(layer(l, "mlp.down_proj.weight"), hb_.data(), xb_.data(), dim, ffn);
         for (int i = 0; i < dim; ++i) x_[i] += xb_[i];
 
         layer_outs.push_back(x_); // copy: this layer's output hidden state
@@ -172,12 +221,16 @@ void LlamaModel::forward_debug(int token, int pos, float* logits_out,
 
     // 3. final norm + lm head
     rmsnorm(x_.data(), w("model.norm.weight"), xb_.data(), dim, cfg_.norm_eps);
-    const TensorInfo* head = nullptr;
-    if (loader_.has("lm_head.weight"))
-        head = &loader_.get("lm_head.weight");
-    else
-        head = &loader_.get("model.embed_tokens.weight"); // tied embeddings
-    matvec(head->as<float>(), xb_.data(), logits_out, cfg_.vocab_size, dim);
+    if (quant_ == QuantMode::F32) {
+        const TensorInfo* head = nullptr;
+        if (loader_.has("lm_head.weight"))
+            head = &loader_.get("lm_head.weight");
+        else
+            head = &loader_.get("model.embed_tokens.weight"); // tied embeddings
+        matvec(head->as<float>(), xb_.data(), logits_out, cfg_.vocab_size, dim);
+    } else {
+        matvec_w("lm_head.weight", xb_.data(), logits_out, cfg_.vocab_size, dim);
+    }
 }
 
 } // namespace tinyinfer
