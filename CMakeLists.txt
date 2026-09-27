@@ -20,6 +20,7 @@ file(GLOB_RECURSE ENGINE_SOURCES CONFIGURE_DEPENDS src/*.cpp)
 list(FILTER ENGINE_SOURCES EXCLUDE REGEX ".*main\\.cpp$")
 add_library(tinyinfer_lib ${ENGINE_SOURCES})
 target_include_directories(tinyinfer_lib PUBLIC include)
+target_link_libraries(tinyinfer_lib PUBLIC nlohmann_json::nlohmann_json)
 
 # Main CLI
 add_executable(tinyinfer src/main.cpp)
@@ -34,11 +35,20 @@ FetchContent_Declare(
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
+# nlohmann/json for the safetensors JSON header (header-only)
+FetchContent_Declare(
+  nlohmann_json
+  URL https://github.com/nlohmann/json/archive/v3.11.3.tar.gz
+)
+FetchContent_MakeAvailable(nlohmann_json)
+
 enable_testing()
 file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS tests/*.cpp)
 if(TEST_SOURCES)
   add_executable(tinyinfer_tests ${TEST_SOURCES})
   target_link_libraries(tinyinfer_tests PRIVATE tinyinfer_lib gtest_main)
+  target_compile_definitions(tinyinfer_tests PRIVATE
+    TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/test_data")
   include(GoogleTest)
   gtest_discover_tests(tinyinfer_tests)
 endif()
