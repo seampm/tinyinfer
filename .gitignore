@@ -1,0 +1,25 @@
+# Model weights - never commit (hundreds of MB to GB)
+*.bin
+*.safetensors
+*.pt
+*.onnx
+models/
+checkpoints/
+
+# Build
+build/
+cmake-build-*/
+*.o
+*.a
+*.so
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.venv/
