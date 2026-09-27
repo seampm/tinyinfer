@@ -107,3 +107,34 @@ TEST(Forward, BadInputsThrow) {
 }
 
 } // namespace
+
+TEST(Forward, Int8CloseToF32) {
+    // Phase 7: per-row symmetric int8 must not wreck the forward pass.
+    nlohmann::json manifest;
+    {
+        std::ifstream f(kDir + "/manifest.json");
+        ASSERT_TRUE(f) << "run scripts/make_llama_tiny.py first";
+        f >> manifest;
+    }
+    std::vector<int> input_ids = manifest.at("input_ids").get<std::vector<int>>();
+    const int seq = static_cast<int>(input_ids.size());
+
+    tinyinfer::LlamaModel f32, i8;
+    f32.load(kDir + "/model.safetensors", kDir + "/config.json");
+    i8.set_quant_mode(tinyinfer::QuantMode::I8);
+    i8.load(kDir + "/model.safetensors", kDir + "/config.json");
+    const auto& cfg = f32.config();
+    std::vector<float> lf(cfg.vocab_size), li(cfg.vocab_size);
+
+    f32.reset();
+    double num = 0, den = 0;
+    for (int pos = 0; pos < seq; ++pos) {
+        f32.forward(input_ids[pos], pos, lf.data());
+        i8.forward_full(input_ids.data(), pos + 1, li.data());
+        for (int v = 0; v < cfg.vocab_size; ++v) {
+            num += (li[v] - lf[v]) * (li[v] - lf[v]);
+            den += lf[v] * lf[v];
+        }
+    }
+    EXPECT_LT(std::sqrt(num / den), 0.05) << "int8 forward drifted too far";
+}
