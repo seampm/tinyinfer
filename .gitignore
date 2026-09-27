@@ -25,3 +25,6 @@ cmake-build-*/
 __pycache__/
 *.pyc
 .venv/
+
+# Eval data (re-fetchable, see bench/README.md)
+data/
