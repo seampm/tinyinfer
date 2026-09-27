@@ -43,3 +43,21 @@ Interview prep gold — "walk me through a hard bug" lives here.
   HF Llama — this is what Phase 4 verification compares against, so the choice
   is load-bearing. Softmax subtracts max first (test uses inputs ~1000 to prove
   stability). Optimization (OpenMP/SIMD) deferred to Phase 7; signatures stable.
+
+### 2026-09-27 — Phase 4 forward pass
+- **What:** include/tinyinfer/model.h + src/model.cpp: LlamaModel with HF
+  config.json parsing, mmap'd weights, internal KV cache, incremental
+  forward(token, pos) -> logits. forward_debug captures per-layer outputs.
+- **Result:** Matches the HF reference layer-by-layer within 1e-4 on the first
+  run (2-layer tiny fixture, 4-token prompt) — the per-op verification in
+  Phase 3 paid off.
+- **Bug (real debugging):** rope() indexed k by q-head (k + h*head_dim) but with
+  GQA k only has n_kv_heads heads -> heap corruption, caught by the
+  determinism test. Fixed signature to rope(q, k, n_q_heads, n_kv_heads, ...);
+  the op test only covered n_q == n_kv, so added Ops.RopeGqa regression test.
+  Also hoisted inv_freq/cos/sin out of the head loop.
+- **Decisions:** KV cache lives in the model from the start (correctness for
+  incremental forward); Phase 6 will benchmark cached vs naive recompute for
+  the before/after numbers. Tied embeddings fall back to embed_tokens if
+  lm_head.weight is absent. forward() with increasing pos requires reset()
+  before each new sequence.
