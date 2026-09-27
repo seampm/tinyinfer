@@ -1,40 +1,64 @@
-# tinyinfer — LLM Inference Engine in C++
+# tinyinfer
 
-> **What am I looking at?** When you chat with an AI, an *inference engine* is the software
-> running the neural network and generating each word. **tinyinfer is one of those engines —
-> written entirely from scratch in C++**: no AI frameworks, no copied code. The file-format
-> parser, the tokenizer, the math kernels, and the quantization are all hand-built, and every
-> optimization was measured before/after ([DESIGN_LOG.md](DESIGN_LOG.md) records what helped,
-> what didn't, and why).
+An LLM inference engine in C++, written from scratch. No ML frameworks, no copied code. The safetensors parser, BPE tokenizer, math kernels, and quantization are all hand-written.
+
+**[Live demo](https://seampm.github.io/tinyinfer/)** — terminal replay, benchmark charts, architecture walkthrough.
 
 ![demo](bench/demo.gif)
 
-**▶ [Interactive demo](https://seampm.github.io/tinyinfer/)** — a guided tour with a
-live terminal replay, benchmark charts, and architecture walkthrough. No setup required.
-
-## Highlights
-
-- **Hand-built, not assembled** — every component written from zero: safetensors file parser
-  over `mmap`, BPE tokenizer, AVX2/FMA vector math kernels, per-row int8 quantization.
-  Zero ML dependencies, ~1,700 lines of C++20.
-- **Benchmarked against the best** — measured head-to-head with [llama.cpp](https://github.com/ggerganov/llama.cpp),
-  the industry-standard open-source engine: **matches it** on a 15M-parameter model (101%),
-  reaches **74%** on a 1.1B model, with honest methodology published below.
-- **Found a real bug by benchmarking** — the comparison exposed that my vector math kernel was
-  limited by CPU instruction latency, not memory speed as assumed. Restructuring it gave an
-  instant 1.5× speedup — the kind of win you only get from measuring against a reference.
-- **Correctness proven, not claimed** — 42/42 tests pass; outputs match Hugging Face
-  layer-by-layer within 1e-4 and PyTorch token-for-token; quantization validated on WikiText-2
-  with no measurable quality loss (−1.0%, noise).
-
 ## What it does
 
-- **Load**: Llama-arch checkpoints (`model.safetensors` + `config.json`) via a hand-written safetensors parser over mmap — near-instant startup, zero ML dependencies
-- **Tokenize**: BPE from `tokenizer.json`, byte-exact vs the Python `tokenizers` library on 21/21 differential test strings (including `added_tokens` normalization edge cases)
-- **Run**: full Llama forward pass — RMSNorm, GQA self-attention with NeoX RoPE, SwiGLU MLP, KV cache — verified layer-by-layer against Hugging Face within 1e-4
+- **Load**: Llama checkpoints (`model.safetensors` + `config.json`) via a hand-written safetensors parser over mmap
+- **Tokenize**: BPE from `tokenizer.json`, byte-exact vs the Python `tokenizers` library on 21/21 test strings
+- **Run**: full Llama forward pass — RMSNorm, GQA attention with NeoX RoPE, SwiGLU MLP, KV cache — verified layer-by-layer against Hugging Face within 1e-4
 - **Sample**: greedy, temperature, top-k, top-p with seeded RNG (greedy output token-identical to PyTorch)
-- **Quantize**: per-row symmetric int8 weights (`--quant i8`), validated by WikiText-2 perplexity delta vs fp32
+- **Quantize**: per-row symmetric int8 weights (`--quant i8`), validated by WikiText-2 perplexity
 - **Measure**: `bench` (cached vs naive tok/s), `perplexity` (WikiText-2)
+
+## Benchmarks
+
+2-core VM, AVX2+FMA, `g++ -O3 -march=native`, OpenMP 2 threads. Median of 3 runs, 15-token prompt, 128 generated tokens, greedy. llama.cpp rev `2b129cc`, F32 GGUF.
+
+| model | engine | precision | decode tok/s |
+|---|---|---|---|
+| TinyStories-15M | tinyinfer | fp32 | **276** |
+| TinyStories-15M | tinyinfer | int8 | **606** |
+| TinyStories-15M | llama.cpp | fp32 | 274 |
+| TinyLlama-1.1B | tinyinfer | fp32 | **5.1** |
+| TinyLlama-1.1B | llama.cpp | fp32 | 6.9 |
+
+101% of llama.cpp on the 15M model, 74% on 1.1B. int8 is 2.19x fp32 on 15M. The 1.1B gap is kernel micro-optimization (cache blocking, blocked accumulation) that isn't done yet.
+
+![throughput](bench/charts/throughput.png)
+
+### How it got there (15M decode tok/s)
+
+| configuration | tok/s |
+|---|---|
+| scalar fp32, KV cache | 67 |
+| + AVX2/FMA, 4-way unrolled accumulators | 276 |
+| + per-row int8 quantization | 606 |
+
+![journey](bench/charts/journey.png)
+
+The biggest single win came from benchmarking against llama.cpp: it showed the AVX2 kernel was latency-bound (one accumulator chain against 4–5 cycle FMA latency), not bandwidth-bound as assumed. Unrolling 4x gave 1.6x on the 1.1B immediately. Without a reference to compare against, 3.4 tok/s would have looked like the hardware limit.
+
+### Perplexity (WikiText-2, 19,999 scored tokens)
+
+| precision | perplexity |
+|---|---|
+| fp32 | 6260.2 |
+| int8 | 6199.8 |
+
+int8 changes perplexity by −1.0% (noise). The 2.19x speedup costs nothing measurable in quality.
+
+## Tradeoffs
+
+- Every kernel has a scalar reference and a differential test vs NumPy/HF before optimization. The fast path never diverges from the tested path.
+- int8, not int4: 4-bit needs blocked quantization (Q4_0-style) to stay accurate. Honest int8 now, int4 done properly later.
+- OpenMP only where it wins: threading the 32k-row lm_head helps; threading the small attention/MLP mats measured slower (overhead > gain).
+- Weights are memory-mapped: instant startup, the OS pages in only what's touched. First-token latency includes page faults.
+- The from-scratch BPE is byte-exact but ~35x slower than the Python library on megabyte inputs. The perplexity harness accepts pre-tokenized `--ids` for large corpora.
 
 ## Architecture
 
@@ -57,11 +81,7 @@ token ids ──► embedding lookup ──────────────�
     └── KV cache: keys/values appended per position, never recomputed
 ```
 
-Hot path per decode step is one matvec per weight matrix (all weights streamed
-once per token — decode is memory-bandwidth bound). Two matvec kernels:
-`dot_avx2` (fp32, 4-way unrolled FMA) and `matvec_i8` (per-row int8 + fp32
-scales, widened on the fly). OpenMP parallelizes only the 32k-row lm_head;
-smaller mats run single-threaded (threading them measured slower).
+The hot path per decode step is one matvec per weight matrix (all weights streamed once per token; decode is memory-bandwidth bound). Two matvec kernels: `dot_avx2` (fp32, 4-way unrolled FMA) and `matvec_i8` (per-row int8 + fp32 scales, widened on the fly). OpenMP parallelizes only the 32k-row lm_head; smaller mats run single-threaded (threading them measured slower).
 
 ## Quickstart
 
@@ -74,87 +94,12 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
 ./build/tinyinfer bench "Once upon a time" --max-tokens 128 --skip-naive
 ```
 
-## Benchmarks
-
-2-core VM, AVX2+FMA, `g++ -O3 -march=native`, OpenMP 2 threads.
-Median of 3 runs, 15-token prompt, 128 generated tokens, greedy.
-llama.cpp at rev `2b129cc`, F32 GGUF, `llama-bench -p 15 -n 128`.
-
-| model | engine | precision | decode tok/s |
-|---|---|---|---|
-| TinyStories-15M | tinyinfer | fp32 | **276** |
-| TinyStories-15M | tinyinfer | int8 | **606** |
-| TinyStories-15M | llama.cpp | fp32 | 274 |
-| TinyLlama-1.1B | tinyinfer | fp32 | **5.1** |
-| TinyLlama-1.1B | llama.cpp | fp32 | 6.9 |
-
-- **15M fp32 matches llama.cpp (101%)** — the hand-written kernels hold their own.
-- **int8 is 2.19x fp32** on 15M (606 vs 276) — the 4x smaller weights pay off once the kernel keeps up.
-- **1.1B reaches 74% of llama.cpp** — the remaining gap is kernel micro-optimization (cache blocking, Q8_0-style blocked accumulation), documented in Future work.
-
-![throughput](bench/charts/throughput.png)
-
-### Optimization results (15M decode tok/s)
-
-| configuration | tok/s |
-|---|---|
-| scalar fp32, KV cache | 67 |
-| + AVX2/FMA, 4-way unrolled accumulators | 276 |
-| + per-row int8 quantization | 606 |
-
-![journey](bench/charts/journey.png)
-
-The single biggest win came late: benchmarking against llama.cpp exposed that
-the AVX2 kernel was latency-bound (single accumulator chain vs 4-5 cycle FMA
-latency), not bandwidth-bound as assumed. Unrolling 4x gave 1.6x on the 1.1B
-instantly. Without a reference implementation to compare against, 3.4 tok/s
-would have looked like "the hardware limit."
-
-### Perplexity (WikiText-2, 19,999 scored tokens)
-
-| precision | NLL/token | perplexity |
-|---|---|---|
-| fp32 | 8.7420 | 6260.2 |
-| int8 | 8.7323 | 6199.8 |
-
-Per-row int8 changes perplexity by **−1.0%** (noise) — the quantization is
-numerically sound, and the 2.19x speedup is real.
-
-## Tradeoffs
-
-- **Correctness first, speed second**: every kernel has a scalar reference and a
-  differential test vs NumPy/HF before optimization. The fast path never
-  diverges from the tested path.
-- **int8, not int4**: 4-bit would halve memory traffic again, but needs blocked
-  quantization (Q4_0-style) to stay accurate. Shipped honest int8 instead of
-  half-done int4.
-- **OpenMP only where it wins**: threading the 32k-row lm_head helps;
-  threading 2048-row attention/MLP mats measured slower (overhead > gain).
-- **mmap, not read**: weights are memory-mapped, so startup is instant and the
-  OS pages in only what's touched. Tradeoff: first-token latency includes page
-  faults.
-- **From-scratch BPE is correct but slow**: byte-exact vs Python on all test
-  strings, but ~35x slower on megabyte inputs — the perplexity harness accepts
-  pre-tokenized `--ids` for large corpora.
-
 ## Future work
 
 - Q4_0-style blocked int4/int8 quantization (int32 accumulation in blocks of 32)
 - Cache-blocked matvec for better L2 reuse on large models
 - Paged/blocked KV cache for long contexts
 - Speculative decoding
-
-## Resume bullets
-
-- Built a from-scratch LLM inference engine in C++20 (~1,700 lines, zero ML
-  dependencies): hand-rolled safetensors mmap loader, BPE tokenizer, AVX2/FMA
-  kernels, GQA attention with KV caching, per-row int8 quantization
-- Matches llama.cpp decode throughput on a 15M model (101%) and reaches 74% on
-  a 1.1B model; int8 quantization gives 2.19x speedup with −1.0% perplexity
-  delta on WikiText-2
-- Validated numerically at every stage: 42/42 GoogleTest tests, layer-by-layer
-  parity with Hugging Face within 1e-4, token-identical greedy generation vs
-  PyTorch
 
 ## Layout
 
