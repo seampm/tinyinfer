@@ -9,12 +9,18 @@
 // The KV cache lives inside the model (Phase 6 measures its payoff).
 // Weight names follow Hugging Face Llama; config is read from HF config.json.
 
+#include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "tinyinfer/loader.h"
 
 namespace tinyinfer {
+
+// Phase 7: weight quantization mode. I8 = per-row symmetric int8 weights,
+// fp32 activations; selected before load().
+enum class QuantMode { F32, I8 };
 
 struct ModelConfig {
     int dim = 0;         // hidden_size
@@ -40,6 +46,10 @@ public:
     bool is_loaded() const { return loaded_; }
     const ModelConfig& config() const { return cfg_; }
 
+    // Phase 7: choose quantization before load(). Default F32.
+    void set_quant_mode(QuantMode m) { quant_ = m; }
+    QuantMode quant_mode() const { return quant_; }
+
     // Clear the KV cache before starting a new sequence.
     void reset();
 
@@ -59,6 +69,22 @@ public:
 private:
     const float* w(const std::string& name) const; // F32 weight row-major
     std::string layer(int l, const std::string& suffix) const;
+    // y = W @ x for the weight matrix `name` ([rows x cols]); dispatches to
+    // the int8 path when quant_ == I8.
+    void matvec_w(const std::string& name, const float* x, float* y, int rows,
+                  int cols) const;
+    // Quantize loader tensor `wname` into qmap_[qname].
+    void quantize_into_as(const std::string& qname, const std::string& wname);
+    void quantize_into(const std::string& name); // qname == wname
+
+    // Quantized tensor: per-row symmetric int8 (+ fp32 scale/row).
+    struct QT {
+        std::vector<int8_t> q;
+        std::vector<float> s;
+        int rows = 0, cols = 0;
+    };
+    std::unordered_map<std::string, QT> qmap_; // populated at load() when I8
+    QuantMode quant_ = QuantMode::F32;
 
     ModelConfig cfg_;
     SafetensorsLoader loader_;
