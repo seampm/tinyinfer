@@ -51,6 +51,11 @@ public:
     void forward_debug(int token, int pos, float* logits_out,
                        std::vector<std::vector<float>>& layer_outs);
 
+    // Full forward over tokens[0..n-1] from a clean cache; logits of last token.
+    // Naive baseline: recomputes every K/V each call (no cache reuse). Also the
+    // primitive Phase 7 perplexity scoring needs.
+    void forward_full(const int* tokens, int n, float* logits_out);
+
 private:
     const float* w(const std::string& name) const; // F32 weight row-major
     std::string layer(int l, const std::string& suffix) const;
