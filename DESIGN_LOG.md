@@ -96,3 +96,22 @@ Interview prep gold — "walk me through a hard bug" lives here.
   differential-testing against the reference implementation. The
   check_tokenizer.py differential harness earned its keep twice (the
   normalize-first bug and the empty-string edge).
+
+### 2026-09-27 — Phase 6 KV-cache benchmark (before/after)
+- **What:** Added `LlamaModel::forward_full(tokens, n)` — reset + full forward,
+  the naive "recompute all K/V every step" baseline (and the primitive Phase 7
+  perplexity needs). New `tinyinfer bench` subcommand runs greedy generation
+  both ways and reports ttft/decode tok/s; also asserts identical token streams.
+- **Correctness:** `tests/test_kvcache.cpp`: incremental (cached) logits match
+  `forward_full` recompute within 1e-6 at every prefix length on the tiny
+  fixture, plus a reset-isolation test. 38/38 tests pass.
+- **Numbers** (TinyStories-15M, fp32, 64 greedy tokens, "Once upon a time"):
+  - naive (recompute):  1.87 tok/s decode, ttft 0.069s
+  - cached (KV reuse): 67.0  tok/s decode, ttft 0.077s
+  - **speedup: 35.9x**; token streams identical.
+- **Why it helped:** decode step at position p costs 1 forward cached vs p+1
+  forwards naive, so total work is O(n) vs O(n^2/2) — predicted ratio ~35x at
+  n=69, measured 35.9x. Theory and measurement agree, which is the real result.
+  TTFT is unchanged (prompt processing is a full forward either way).
+- **Lesson:** the bench doubles as a 64-token differential test of the cache.
+  A cache bug wouldn't just be slow — it would show up as a stream mismatch.
