@@ -5,6 +5,8 @@
 *.onnx
 models/
 checkpoints/
+# ...except the tiny unit-test fixture
+!tests/test_data/*.safetensors
 
 # Build
 build/
