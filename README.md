@@ -2,7 +2,7 @@
 
 A from-scratch inference engine for Llama-architecture models (TinyStories 15M/110M for dev, TinyLlama-1.1B for final benchmarks) with no ML frameworks.
 
-> Status: Phase 0 — repo scaffolded. Forward pass, tokenizer, KV-cache, SIMD/OpenMP kernels, and int8/int4 quantization coming per the project plan.
+> Status: Phase 5 — end-to-end text generation works. `./build/tinyinfer prompt "Once upon a time" --max-tokens 50` generates TinyStories text at ~45 tok/s (unoptimized fp32). C++ greedy output is token-identical to PyTorch. SIMD/OpenMP kernels and int8/int4 quantization coming per the project plan.
 
 ## Demo
 
@@ -31,8 +31,10 @@ Prompt → Tokenizer (BPE) → Embedding
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 
-# Run
-./build/tinyinfer --model tinyllama --prompt "Once upon a time" --tokens 200
+# Run (model dir holds model.safetensors + config.json + tokenizer.json)
+./build/tinyinfer prompt "Once upon a time" --max-tokens 50
+./build/tinyinfer prompt "Once upon a time" --max-tokens 50 --temperature 0.8 --top-k 40 --top-p 0.9 --seed 42
+./build/tinyinfer tokenize "Once upon a time"   # debug: print token ids
 ```
 
 Requirements: CMake 3.20+, C++20 compiler, Python 3.10+ (for scripts).
@@ -59,11 +61,11 @@ Context: llama.cpp is the reference. This engine aims to document where the gap 
 
 ## What's Next
 
-- [ ] Phase 1: Python reference (`scripts/reference.py`) saving per-layer outputs
-- [ ] Phase 2: safetensors loader with mmap
-- [ ] Phase 3: math ops (matvec, RMSNorm, softmax, RoPE, SiLU/SwiGLU) + tests
-- [ ] Phase 4: forward pass, layer-by-layer verification
-- [ ] Phase 5: BPE tokenizer, sampling, CLI
+- [x] Phase 1: Python reference (`scripts/reference.py`) saving per-layer outputs
+- [x] Phase 2: safetensors loader with mmap
+- [x] Phase 3: math ops (matvec, RMSNorm, softmax, RoPE, SiLU/SwiGLU) + tests
+- [x] Phase 4: forward pass, layer-by-layer verification
+- [x] Phase 5: BPE tokenizer, sampling, CLI (greedy output token-identical to PyTorch)
 - [ ] Phase 6: KV cache (+ before/after numbers)
 - [ ] Phase 7: OpenMP, AVX2/NEON, int8/int4 quantization + perplexity on WikiText-2
 - [ ] Phase 8: final benchmarks, charts, demo GIF
