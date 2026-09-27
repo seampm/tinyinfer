@@ -1,81 +1,148 @@
 # tinyinfer — LLM Inference Engine in C++
 
-A from-scratch inference engine for Llama-architecture models (TinyStories 15M/110M for dev, TinyLlama-1.1B for final benchmarks) with no ML frameworks.
+A from-scratch inference engine for Llama-architecture models, written in C++20 with no ML frameworks and no copied code. Hand-rolled safetensors mmap loader, from-scratch BPE tokenizer, hand-written AVX2 kernels, per-row int8 quantization, and sampling — benchmarked honestly against llama.cpp.
 
-> Status: Phase 6 — KV-cache benchmarked: 67 tok/s cached vs 1.9 tok/s naive recompute (35.9x speedup, token-identical). SIMD/OpenMP kernels and int8/int4 quantization coming per the project plan.
+Built as a learning project: every optimization was measured before/after, and [DESIGN_LOG.md](DESIGN_LOG.md) records what helped, what didn't, and why.
 
-## Demo
+![demo](bench/demo.gif)
 
-_TODO: Add terminal GIF once CLI generates text end-to-end._
+## What it does
+
+- **Load**: Llama-arch checkpoints (`model.safetensors` + `config.json`) via a hand-written safetensors parser over mmap — near-instant startup, zero ML dependencies
+- **Tokenize**: BPE from `tokenizer.json`, byte-exact vs the Python `tokenizers` library on 21/21 differential test strings (including `added_tokens` normalization edge cases)
+- **Run**: full Llama forward pass — RMSNorm, GQA self-attention with NeoX RoPE, SwiGLU MLP, KV cache — verified layer-by-layer against Hugging Face within 1e-4
+- **Sample**: greedy, temperature, top-k, top-p with seeded RNG (greedy output token-identical to PyTorch)
+- **Quantize**: per-row symmetric int8 weights (`--quant i8`), validated by WikiText-2 perplexity delta vs fp32
+- **Measure**: `bench` (cached vs naive tok/s), `perplexity` (WikiText-2)
 
 ## Architecture
 
 ```
-Prompt → Tokenizer (BPE) → Embedding
-  → N × [ RMSNorm → Attention (RoPE + GQA) + residual
-        → RMSNorm → SwiGLU FFN + residual ]
-  → Final RMSNorm → LM head → Logits → Sampler → Tokens
+prompt text
+    │  BPE tokenizer (tokenizer.json: vocab, merges, added tokens)
+    ▼
+token ids ──► embedding lookup ─────────────────────────────────────────┐
+    │                                                                   │
+    ▼                                                                   │
+┌─ transformer block × N ───────────────────────────────────────────────┤
+│   x ──► RMSNorm ──► Q/K/V proj ──► RoPE ──► GQA attention ──► O proj ─┼─► + x (residual)
+│   x ──► RMSNorm ──► gate proj ──► SiLU ──╳──► down proj ──────────────┼─► + x (residual)
+│                              up proj ──╯    (SwiGLU: silu(gate) * up) │
+└───────────────────────────────────────────────────────────────────────┘
+    │
+    ▼
+ RMSNorm ──► lm_head (32k vocab) ──► softmax ──► sampler ──► next token
+    ▲
+    └── KV cache: keys/values appended per position, never recomputed
 ```
 
-- Each layer: RMSNorm → self-attention with rotary position embeddings (RoPE) and grouped-query attention → residual add → RMSNorm → SwiGLU feed-forward → residual add
-- After all layers: final RMSNorm + output projection to logits
-- KV-cache stores per-layer K/V so each decode step only computes the newest token
+Hot path per decode step is one matvec per weight matrix (all weights streamed
+once per token — decode is memory-bandwidth bound). Two matvec kernels:
+`dot_avx2` (fp32, 4-way unrolled FMA) and `matvec_i8` (per-row int8 + fp32
+scales, widened on the fly). OpenMP parallelizes only the 32k-row lm_head;
+smaller mats run single-threaded (threading them measured slower).
 
-## Build and Run
+## Quickstart
 
 ```bash
-# Fetch models (never committed)
-./scripts/download_models.sh
-
-# Build
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j
-
-# Run (model dir holds model.safetensors + config.json + tokenizer.json)
-./build/tinyinfer prompt "Once upon a time" --max-tokens 50
-./build/tinyinfer prompt "Once upon a time" --max-tokens 50 --temperature 0.8 --top-k 40 --top-p 0.9 --seed 42
-./build/tinyinfer tokenize "Once upon a time"   # debug: print token ids
+cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
+# 15M dev model (download once; gitignored, never committed):
+#   nickypro/tinyllama-15M -> models/tinyllama-15m/ (fp32 safetensors)
+./build/tinyinfer prompt "Once upon a time" --max-tokens 60
+./build/tinyinfer prompt "Once upon a time" --max-tokens 60 --quant i8
+./build/tinyinfer bench "Once upon a time" --max-tokens 128 --skip-naive
 ```
-
-Requirements: CMake 3.20+, C++20 compiler, Python 3.10+ (for scripts).
 
 ## Benchmarks
 
-| Model | Precision | Tokens/sec | Time to first token | Peak memory |
-|-------|-----------|------------|---------------------|-------------|
-| TinyStories-15M (dev) | fp32, KV cache | 67.0 (greedy decode) | 0.08 s | TODO |
-| TinyStories-15M (dev) | fp32, no cache (baseline) | 1.87 (greedy decode) | 0.07 s | TODO |
-| TinyLlama-1.1B | fp32 | TODO | TODO | TODO |
-| TinyLlama-1.1B | int8 | TODO | TODO | TODO |
-| TinyLlama-1.1B | int4 (stretch) | TODO | TODO | TODO |
-| llama.cpp (reference) | — | TODO | TODO | TODO |
+2-core VM, AVX2+FMA, `g++ -O3 -march=native`, OpenMP 2 threads.
+Median of 3 runs, 15-token prompt, 128 generated tokens, greedy.
+llama.cpp at rev `2b129cc`, F32 GGUF, `llama-bench -p 15 -n 128`.
 
-Charts: `bench/results/` (TODO)
+| model | engine | precision | decode tok/s |
+|---|---|---|---|
+| TinyStories-15M | tinyinfer | fp32 | **276** |
+| TinyStories-15M | tinyinfer | int8 | **606** |
+| TinyStories-15M | llama.cpp | fp32 | 274 |
+| TinyLlama-1.1B | tinyinfer | fp32 | **5.1** |
+| TinyLlama-1.1B | llama.cpp | fp32 | 6.9 |
 
-Context: llama.cpp is the reference. This engine aims to document where the gap comes from — e.g. "reaches ~40% of llama.cpp's speed because X".
+- **15M fp32 matches llama.cpp (101%)** — the hand-written kernels hold their own.
+- **int8 is 2.19x fp32** on 15M (606 vs 276) — the 4x smaller weights pay off once the kernel keeps up.
+- **1.1B reaches 74% of llama.cpp** — the remaining gap is kernel micro-optimization (cache blocking, Q8_0-style blocked accumulation), documented in Future work.
 
-## Design Decisions and Tradeoffs
+![throughput](bench/charts/throughput.png)
 
-- **safetensors parsed by hand + mmap**: 8-byte header length, JSON header, raw data; mmap for near-instant loads. Good interview talking point.
-- **fp32 first, optimize later**: simplest correct kernels first, verified layer-by-layer against Hugging Face (1e-4 tolerance), then OpenMP/SIMD/quantization.
-- **No ML frameworks**: all tensor ops hand-written with GoogleTest unit tests vs NumPy reference values.
-- **Prior work**: llama.cpp and llama2.c exist — used only as reference when stuck, never copied. Benchmarked against for context.
+### Optimization journey (15M decode tok/s)
 
-## What's Next
+| stage | tok/s |
+|---|---|
+| scalar fp32, KV cache (Phase 6) | 67 |
+| + AVX2/FMA, 4-way unrolled accumulators | 276 |
+| + per-row int8 quantization | 606 |
 
-- [x] Phase 1: Python reference (`scripts/reference.py`) saving per-layer outputs
-- [x] Phase 2: safetensors loader with mmap
-- [x] Phase 3: math ops (matvec, RMSNorm, softmax, RoPE, SiLU/SwiGLU) + tests
-- [x] Phase 4: forward pass, layer-by-layer verification
-- [x] Phase 5: BPE tokenizer, sampling, CLI (greedy output token-identical to PyTorch)
-- [x] Phase 6: KV cache (+ before/after numbers: 35.9x vs naive recompute)
-- [ ] Phase 7: OpenMP, AVX2/NEON, int8/int4 quantization + perplexity on WikiText-2
-- [ ] Phase 8: final benchmarks, charts, demo GIF
+![journey](bench/charts/journey.png)
 
-## Design Log
+The single biggest win came late: benchmarking against llama.cpp exposed that
+the AVX2 kernel was latency-bound (single accumulator chain vs 4-5 cycle FMA
+latency), not bandwidth-bound as assumed. Unrolling 4x gave 1.6x on the 1.1B
+instantly. Without a reference implementation to compare against, 3.4 tok/s
+would have looked like "the hardware limit."
 
-See `DESIGN_LOG.md` — every >1hr bug, every optimization with before/after numbers, every tradeoff considered. Interview prep gold.
+### Perplexity (WikiText-2, 19,999 scored tokens)
 
-## License
+| precision | NLL/token | perplexity |
+|---|---|---|
+| fp32 | 8.7420 | 6260.2 |
+| int8 | 8.7323 | 6199.8 |
 
-MIT
+Per-row int8 changes perplexity by **−1.0%** (noise) — the quantization is
+numerically sound, and the 2.19x speedup is real.
+
+## Tradeoffs
+
+- **Correctness first, speed second**: every kernel has a scalar reference and a
+  differential test vs NumPy/HF before optimization. The fast path never
+  diverges from the tested path.
+- **int8, not int4**: 4-bit would halve memory traffic again, but needs blocked
+  quantization (Q4_0-style) to stay accurate. Shipped honest int8 instead of
+  half-done int4.
+- **OpenMP only where it wins**: threading the 32k-row lm_head helps;
+  threading 2048-row attention/MLP mats measured slower (overhead > gain).
+- **mmap, not read**: weights are memory-mapped, so startup is instant and the
+  OS pages in only what's touched. Tradeoff: first-token latency includes page
+  faults.
+- **From-scratch BPE is correct but slow**: byte-exact vs Python on all test
+  strings, but ~35x slower on megabyte inputs — the perplexity harness accepts
+  pre-tokenized `--ids` for large corpora.
+
+## Future work
+
+- Q4_0-style blocked int4/int8 quantization (int32 accumulation in blocks of 32)
+- Cache-blocked matvec for better L2 reuse on large models
+- Paged/blocked KV cache for long contexts
+- Speculative decoding
+
+## Resume bullets
+
+- Built a from-scratch LLM inference engine in C++20 (~1,700 lines, zero ML
+  dependencies): hand-rolled safetensors mmap loader, BPE tokenizer, AVX2/FMA
+  kernels, GQA attention with KV caching, per-row int8 quantization
+- Matches llama.cpp decode throughput on a 15M model (101%) and reaches 74% on
+  a 1.1B model; int8 quantization gives 2.19x speedup with −1.0% perplexity
+  delta on WikiText-2
+- Validated numerically at every stage: 42/42 GoogleTest tests, layer-by-layer
+  parity with Hugging Face within 1e-4, token-identical greedy generation vs
+  PyTorch
+
+## Layout
+
+```
+src/            engine, model, ops (SIMD), tokenizer, sampling, CLI
+include/        public headers
+tests/          GoogleTest suite (42 tests)
+bench/          benchmark scripts, charts, demo GIF
+scripts/        reference.py (answer key), check_perplexity.py (HF parity)
+docs/           architecture.md
+DESIGN_LOG.md   every measurement, failed optimization, and tradeoff
+```
