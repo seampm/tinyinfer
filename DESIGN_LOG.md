@@ -61,3 +61,38 @@ Interview prep gold — "walk me through a hard bug" lives here.
   the before/after numbers. Tied embeddings fall back to embed_tokens if
   lm_head.weight is absent. forward() with increasing pos requires reset()
   before each new sequence.
+
+### 2026-09-27 — Phase 5 tokenizer, sampling, CLI (first real generation)
+- **What:** include/tinyinfer/tokenizer.h + src/tokenizer.cpp: BPE parsed from
+  HF tokenizer.json (vocab, merges, added_tokens); include/tinyinfer/sampling.h
+  + src/sampling.cpp (temperature, top-k, top-p, greedy); src/main.cpp CLI with
+  `prompt` and `tokenize` subcommands.
+- **Model choice:** nickypro/tinyllama-15M (Llama-2 arch, converted from
+  karpathy/tinyllamas, safetensors F16). scripts/download_models.sh downloads
+  config/tokenizer/weights and casts F16->F32 on the way in (fp32-first design).
+  Config: 6 layers, dim 288, 6 heads (MHA), ffn 768, vocab 32000,
+  tied embeddings (no lm_head.weight — the Phase 4 fallback handles it).
+- **Result:** `./build/tinyinfer prompt "Once upon a time" --max-tokens 60`
+  generates a coherent TinyStories-style story at ~45 tok/s (unoptimized fp32).
+  C++ greedy decoding is TOKEN-IDENTICAL to PyTorch over 8 tokens
+  (scripts/check_generation.py) — the whole pipeline (tokenizer -> model ->
+  sampler) verified end-to-end. 36/36 unit tests pass; 21/21 real-tokenizer
+  strings match the Python `tokenizers` library exactly
+  (scripts/check_tokenizer.py).
+- **Bug (real debugging, ~1hr):** first encode() split added special tokens on
+  the RAW text, then normalized each piece. Correct for added_tokens with
+  "normalized": false, but this tokenizer uses "normalized": true — HF
+  normalizes the WHOLE input first, then splits on the NORMALIZED spellings
+  ('<s>' -> '▁<s>'), and BPEs the gaps WITHOUT re-normalizing. So 'a<s>bc'
+  must NOT treat '<s>' as special (it's glued to 'a'), while '<s>bc' must.
+  Found by probing the Python library; both paths now implemented and
+  unit-tested (mini_tokenizer.json + mini_tokenizer_raw.json fixtures).
+- **Gotcha:** HF returns [] for empty input (short-circuits before the
+  normalizer); matched. Also, Python's decode() on THIS tokenizer.json does not
+  skip <s>/</s> even with skip_special_tokens=True (quirk of the file); the C++
+  decode skips specials, which is the sane behavior and what the CLI wants.
+- **Lesson:** "just parse tokenizer.json" is 90% BPE-merges and 10% weird
+  normalizer/added-token interaction semantics that you can only discover by
+  differential-testing against the reference implementation. The
+  check_tokenizer.py differential harness earned its keep twice (the
+  normalize-first bug and the empty-string edge).
