@@ -1,0 +1,5 @@
+# Phase 1 reference script dependencies
+transformers>=4.40
+torch --index-url https://download.pytorch.org/whl/cpu
+safetensors
+numpy
