@@ -40,6 +40,7 @@ struct Args {
     int max_tokens = 50;
     int limit = 20000;              // perplexity: max tokens to score
     std::string quant = "f32";      // f32 | i8
+    bool skip_naive = false;        // bench: skip the naive recompute baseline
     tinyinfer::SampleConfig sample;
 };
 
@@ -67,6 +68,7 @@ bool parse_args(int argc, char** argv, Args& a) {
         else if (o == "--ids") need(o.c_str(), a.ids_file);
         else if (o == "--quant") need(o.c_str(), a.quant);
         else if (o == "--max-tokens") { need(o.c_str(), v); a.max_tokens = std::stoi(v); }
+        else if (o == "--skip-naive") a.skip_naive = true;
         else if (o == "--limit") { need(o.c_str(), v); a.limit = std::stoi(v); }
         else if (o == "--temperature") { need(o.c_str(), v); a.sample.temperature = std::stof(v); }
         else if (o == "--top-k") { need(o.c_str(), v); a.sample.top_k = std::stoi(v); }
@@ -210,9 +212,7 @@ int cmd_bench(const Args& a) {
     };
 
     Run cached = run(true);
-    Run naive = run(false);
 
-    const bool identical = cached.gen == naive.gen;
     auto tps = [](const Run& r) {
         return r.decode > 0 ? r.gen.size() / r.decode : 0.0;
     };
@@ -221,10 +221,16 @@ int cmd_bench(const Args& a) {
     std::cout << "mode    generated  ttft(s)   decode(s)  tok/s\n";
     std::cout << "cached  " << cached.gen.size() << "         " << cached.ttft << "  "
               << cached.decode << "  " << tps(cached) << "\n";
-    std::cout << "naive   " << naive.gen.size() << "         " << naive.ttft << "  "
-              << naive.decode << "  " << tps(naive) << "\n";
-    std::cout << "cache speedup: " << tps(cached) / tps(naive)
-              << "x; token streams identical: " << (identical ? "yes" : "NO") << "\n";
+    bool identical = true;
+    if (!a.skip_naive) {
+        Run naive = run(false);
+        identical = cached.gen == naive.gen;
+        std::cout << "naive   " << naive.gen.size() << "         " << naive.ttft
+                  << "  " << naive.decode << "  " << tps(naive) << "\n";
+        std::cout << "cache speedup: " << tps(cached) / tps(naive)
+                  << "x; token streams identical: "
+                  << (identical ? "yes" : "NO") << "\n";
+    }
     std::cout << "sample: " << tok.decode(cached.gen).substr(0, 120) << "\n";
     return identical ? 0 : 1;
 }
