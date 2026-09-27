@@ -34,23 +34,26 @@ void softmax(float* x, int n) {
     for (int i = 0; i < n; ++i) x[i] /= s;
 }
 
-void rope(float* q, float* k, int num_heads, int head_dim, int pos, float theta) {
+void rope(float* q, float* k, int n_q_heads, int n_kv_heads, int head_dim, int pos,
+          float theta) {
     const int half = head_dim / 2;
-    for (int h = 0; h < num_heads; ++h) {
-        float* qh = q + static_cast<size_t>(h) * head_dim;
-        float* kh = k + static_cast<size_t>(h) * head_dim;
-        for (int i = 0; i < half; ++i) {
-            const float inv_freq = 1.0f / std::pow(theta, (2.0f * i) / head_dim);
-            const float angle = pos * inv_freq;
-            const float c = std::cos(angle);
-            const float s = std::sin(angle);
-            // rotate (v[i], v[i+half]) — NeoX style, matches HF Llama
-            const float q0 = qh[i], q1 = qh[i + half];
-            qh[i] = q0 * c - q1 * s;
-            qh[i + half] = q0 * s + q1 * c;
-            const float k0 = kh[i], k1 = kh[i + half];
-            kh[i] = k0 * c - k1 * s;
-            kh[i + half] = k0 * s + k1 * c;
+    // inv_freq depends only on i, not on the head — hoist it out of the head loop.
+    for (int i = 0; i < half; ++i) {
+        const float inv_freq = 1.0f / std::pow(theta, (2.0f * i) / head_dim);
+        const float angle = pos * inv_freq;
+        const float c = std::cos(angle);
+        const float s = std::sin(angle);
+        for (int h = 0; h < n_q_heads; ++h) {
+            float* qh = q + static_cast<size_t>(h) * head_dim;
+            const float a = qh[i], b = qh[i + half];
+            qh[i] = a * c - b * s;
+            qh[i + half] = a * s + b * c;
+        }
+        for (int h = 0; h < n_kv_heads; ++h) {
+            float* kh = k + static_cast<size_t>(h) * head_dim;
+            const float a = kh[i], b = kh[i + half];
+            kh[i] = a * c - b * s;
+            kh[i + half] = a * s + b * c;
         }
     }
 }
