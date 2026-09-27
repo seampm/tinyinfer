@@ -230,18 +230,17 @@ token ids ──► embedding lookup ──────────────�
 
 <script>
 const SESSION = [
-  {t:"$ ./build/tinyinfer prompt \"Once upon a time, there was a little girl named Lily. She found a\" --max-tokens 100 --quant i8", c:"cmd"},
+  {t:"$ ./build/tinyinfer prompt \"Sam the sailor spotted a tiny island with a tall palm tree\" --max-tokens 100 --quant i8", c:"cmd"},
   {t:"", c:""},
-  {t:"Once upon a time, there was a little girl named Lily. She found a", c:""},
-  {t:"mysterious box in her backyard. She didn't know what was inside,", c:""},
-  {t:"but she was very curious. She opened the box and found a note", c:""},
-  {t:"that said \"Do not open until the next day.\"", c:""},
-  {t:"Lily was very excited to find out what was in the box. She decided", c:""},
-  {t:"to clean it and see what was inside. She tried to open the box,", c:""},
-  {t:"but it was locked. She asked her mom for help, but her mom was", c:""},
-  {t:"busy. So, Lily decided to try", c:""},
+  {t:"Sam the sailor spotted a tiny island with a tall palm tree. He thought", c:""},
+  {t:"it looked very inviting and decided to go explore it.", c:""},
+  {t:"When he arrived at the island, he saw a big bird perched on the palm", c:""},
+  {t:"tree. The bird said to him, \"Hello, Sam. I'm so glad to meet you\".", c:""},
+  {t:"Sam replied, \"I'm Sam. What's your name?\".", c:""},
+  {t:"The bird said, \"My name is Bob. I'm a very wise old bird. Would you", c:""},
+  {t:"like to come", c:""},
   {t:"", c:""},
-  {t:"[tinyinfer] 100 tokens in 0.17s (606 tok/s, int8, TinyStories-15M)", c:"meta"},
+  {t:"[tinyinfer] 100 tokens in 0.28s (357 tok/s, int8, TinyStories-15M)", c:"meta"},
 ];
 const tty = document.getElementById('tty');
 let timers = [];
