@@ -2,7 +2,7 @@
 
 A from-scratch inference engine for Llama-architecture models (TinyStories 15M/110M for dev, TinyLlama-1.1B for final benchmarks) with no ML frameworks.
 
-> Status: Phase 5 — end-to-end text generation works. `./build/tinyinfer prompt "Once upon a time" --max-tokens 50` generates TinyStories text at ~45 tok/s (unoptimized fp32). C++ greedy output is token-identical to PyTorch. SIMD/OpenMP kernels and int8/int4 quantization coming per the project plan.
+> Status: Phase 6 — KV-cache benchmarked: 67 tok/s cached vs 1.9 tok/s naive recompute (35.9x speedup, token-identical). SIMD/OpenMP kernels and int8/int4 quantization coming per the project plan.
 
 ## Demo
 
@@ -43,6 +43,8 @@ Requirements: CMake 3.20+, C++20 compiler, Python 3.10+ (for scripts).
 
 | Model | Precision | Tokens/sec | Time to first token | Peak memory |
 |-------|-----------|------------|---------------------|-------------|
+| TinyStories-15M (dev) | fp32, KV cache | 67.0 (greedy decode) | 0.08 s | TODO |
+| TinyStories-15M (dev) | fp32, no cache (baseline) | 1.87 (greedy decode) | 0.07 s | TODO |
 | TinyLlama-1.1B | fp32 | TODO | TODO | TODO |
 | TinyLlama-1.1B | int8 | TODO | TODO | TODO |
 | TinyLlama-1.1B | int4 (stretch) | TODO | TODO | TODO |
@@ -66,7 +68,7 @@ Context: llama.cpp is the reference. This engine aims to document where the gap 
 - [x] Phase 3: math ops (matvec, RMSNorm, softmax, RoPE, SiLU/SwiGLU) + tests
 - [x] Phase 4: forward pass, layer-by-layer verification
 - [x] Phase 5: BPE tokenizer, sampling, CLI (greedy output token-identical to PyTorch)
-- [ ] Phase 6: KV cache (+ before/after numbers)
+- [x] Phase 6: KV cache (+ before/after numbers: 35.9x vs naive recompute)
 - [ ] Phase 7: OpenMP, AVX2/NEON, int8/int4 quantization + perplexity on WikiText-2
 - [ ] Phase 8: final benchmarks, charts, demo GIF
 
