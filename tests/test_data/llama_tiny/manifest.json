@@ -1,0 +1,32 @@
+{
+  "input_ids": [
+    1,
+    7,
+    13,
+    42
+  ],
+  "tolerance": 0.0001,
+  "tensors": {
+    "layer_0": {
+      "shape": [
+        4,
+        32
+      ],
+      "file": "layer_0.bin"
+    },
+    "layer_1": {
+      "shape": [
+        4,
+        32
+      ],
+      "file": "layer_1.bin"
+    },
+    "logits": {
+      "shape": [
+        4,
+        64
+      ],
+      "file": "logits.bin"
+    }
+  }
+}
