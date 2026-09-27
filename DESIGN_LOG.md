@@ -115,3 +115,77 @@ Interview prep gold — "walk me through a hard bug" lives here.
   TTFT is unchanged (prompt processing is a full forward either way).
 - **Lesson:** the bench doubles as a 64-token differential test of the cache.
   A cache bug wouldn't just be slow — it would show up as a stream mismatch.
+
+### 2026-09-27 — Phase 7 AVX2 matvec (before/after)
+- **What:** hand-wrote an AVX2/FMA dot product (`dot_avx2`: 8 floats/iter,
+  `_mm256_fmadd_ps`, horizontal sum, scalar tail) for `matvec`, the documented
+  hot spot. `matvec_scalar` kept as the test reference; new
+  `Ops.MatvecAvx2MatchesScalar` test (incl. 32000x288 vocab-head shape) agrees
+  within 1e-3. Compile-time `#ifdef __AVX2__` dispatch (binary already
+  `-march=native`), scalar fallback preserved.
+- **Numbers** (15M fp32, 64 greedy tokens): 67.0 -> **322 tok/s (4.8x)**.
+- **Why it helped:** the old `sum += row[j]*x[j]` loop has a loop-carried
+  dependency; without `-ffast-math` the compiler won't reassociate the
+  reduction, so it ran ~scalar/latency-bound. The FMA version does 16
+  flops/cycle. This moved decode from compute-bound to memory-bound:
+  44MB/token of weights at 322 tok/s ~= 14GB/s, i.e. the machine's bandwidth
+  wall — which is exactly what the next measurement confirmed.
+- **Lesson:** measure first, then the bottleneck tells you what to do next.
+
+### 2026-09-27 — Phase 7 OpenMP: threads don't help a bandwidth-bound loop
+- **What:** `#pragma omp parallel for schedule(static)` over matvec rows,
+  gated on `rows >= 4096` so only the 32000-row lm_head/vocab matvec threads
+  (small attention/MLP mats would drown in fork overhead).
+- **Numbers:** 1 thread 322 tok/s vs 2 threads **319 tok/s** — no gain
+  (slightly negative). OpenMP confirmed active (`-fopenmp` in flags).
+- **Why:** one thread already saturates ~14GB/s of memory bandwidth on the
+  36MB lm_head; a second thread just fights for the same bus. Threads help
+  compute-bound work; decode here is a streaming-weight problem.
+- **Lesson (the honest one for the README):** the fix for a bandwidth wall
+  isn't more threads, it's less traffic — i.e. quantization. Kept the OpenMP
+  path anyway: it's correct, tested, and would matter on wider machines or
+  for prompt processing (many tokens per forward). The threshold keeps it
+  from ever hurting.
+
+### 2026-09-27 — Phase 7 int8 quantization (per-row symmetric)
+- **What:** `quantize_i8` (per-row symmetric, scale=max|row|/127) +
+  `matvec_i8` (AVX2: int8->int16->int32->fp32 widening, FMA with fp32
+  activations, scale applied per row). Model holds a quantized copy of every
+  matvec weight (incl. a quantized copy of the embedding table for the tied
+  lm head); embeddings/norms stay fp32. `--quant i8` on prompt/bench/
+  perplexity.
+- **Correctness:** `Ops.QuantizeI8Roundtrip` (half-LSB bound, zero-row scale
+  guard), `Ops.MatvecI8MatchesF32` (rel err < 2%), `Forward.Int8CloseToF32`
+  (full-model int8 vs fp32 forward, rel err < 5%). All pass.
+- **Numbers** (15M, 64 greedy tokens): fp32 322 -> int8 **548 tok/s (1.70x)**.
+- **Why only 1.7x, not 4x:** traffic drops 44MB -> ~15MB/token, but the AVX2
+  kernel spends ~3 widening instructions per 8 weights on int8->fp32
+  conversion — the kernel is no longer pure streaming. A Q8_0-style blocked
+  kernel with int32 accumulation (like llama.cpp's) would close this gap;
+  noted as future work rather than claimed.
+- **Accuracy:** WikiText-2 perplexity, 20k tokens, non-overlapping 256-token
+  chunks: fp32 PPL vs int8 PPL measured with `tinyinfer perplexity`
+  (fp32 result cross-checked against HF transformers — see check script).
+- **Perplexity** (WikiText-2 test, 19999 tokens, non-overlapping 256-token
+  chunks, `tinyinfer perplexity --ids`): fp32 PPL **6260.2** vs int8 PPL
+  **6199.8** — delta **-1.0%** (int8 trivially *better*, i.e. pure noise).
+  Absolute PPL is awful because it's a children's-stories model scored on
+  Wikipedia — expected and irrelevant. What matters: per-row symmetric int8
+  causes no meaningful degradation. (The eval harness reuses the Phase-5
+  PyTorch-verified forward pass + textbook NLL math; fp32 cross-check vs HF
+  transformers lives in scripts/check_perplexity.py.)
+
+### 2026-09-27 — Phase 7 perplexity: our BPE is correct but slow on long inputs
+- **What:** `tinyinfer perplexity` on WikiText-2 initially tokenized the 1.3MB
+  eval text in-process — and never finished: a 50KB prefix alone exceeded a
+  120s timeout. The BPE merge loop is effectively O(n^2)-ish on long inputs
+  (correctness was the Phase 5 goal; throughput wasn't measured).
+- **Workaround (honest):** tokenization is already differentially verified
+  (21/21 strings byte-exact vs Python), so the eval harness pre-tokenizes with
+  the Python `tokenizers` library (337k tokens in 3.4s) and `perplexity`
+  accepts `--ids FILE`. The model measurement is unaffected.
+- **Lesson / future work:** a production BPE needs the standard tricks —
+  regex pre-tokenization into words, per-word merge caching, priority-queue
+  merge selection. Our CLI `prompt` path is fine (short prompts), but long-
+  document ingestion would need this. Good interview talking point: "I know
+  exactly where my tokenizer is slow and why."
