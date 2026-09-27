@@ -16,11 +16,12 @@ void rmsnorm(const float* x, const float* weight, float* out, int n, float eps);
 void softmax(float* x, int n);
 
 // Rotary position embeddings, GPT-NeoX style (matches HF Llama).
-// Rotates q and k in place; each is [num_heads * head_dim] at position pos.
-// Pair i (0 <= i < head_dim/2): angle = pos / theta^(2i/head_dim),
+// Rotates q ([n_q_heads * head_dim]) and k ([n_kv_heads * head_dim]) in place
+// at position pos. Pair i (0 <= i < head_dim/2): angle = pos / theta^(2i/head_dim),
 //   (a, b) = (v[i], v[i + head_dim/2]) ->
 //   (a*cos(angle) - b*sin(angle), a*sin(angle) + b*cos(angle))
-void rope(float* q, float* k, int num_heads, int head_dim, int pos, float theta = 10000.0f);
+void rope(float* q, float* k, int n_q_heads, int n_kv_heads, int head_dim, int pos,
+          float theta = 10000.0f);
 
 float silu(float x);              // x * sigmoid(x)
 void vec_silu(float* x, int n);   // in-place SiLU
