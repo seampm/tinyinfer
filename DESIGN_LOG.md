@@ -33,3 +33,13 @@ Interview prep gold — "walk me through a hard bug" lives here.
   header dict. F32-first; F16/BF16 parse but kernels come in Phase 3/7.
 - **Gotcha:** push_files.py needed the existing blob sha for updates (422
   without it) — fixed.
+
+### 2026-09-27 — Phase 3 math ops
+- **What:** matvec, rmsnorm, stable softmax, RoPE (NeoX style), silu/vec_silu,
+  vec_mul — all fp32, simplest correct versions in include/tinyinfer/ops.h.
+- **Result:** 9/9 new tests pass vs NumPy values from
+  scripts/make_ops_reference.py (tolerance 1e-5).
+- **Decisions:** RoPE uses GPT-NeoX layout (rotate (x[i], x[i+half])), matching
+  HF Llama — this is what Phase 4 verification compares against, so the choice
+  is load-bearing. Softmax subtracts max first (test uses inputs ~1000 to prove
+  stability). Optimization (OpenMP/SIMD) deferred to Phase 7; signatures stable.
