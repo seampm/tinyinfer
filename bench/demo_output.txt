@@ -1,0 +1,18 @@
+$ ./build/tinyinfer prompt "Once upon a time, there was a little girl named Lily. She found a" --max-tokens 100 --quant i8
+
+Once upon a time, there was a little girl named Lily. She found a
+mysterious box in her backyard. She didn't know what was inside,
+but she was very curious. She opened the box and found a note
+that said "Do not open until the next day."
+Lily was very excited to find out what was in the box. She decided
+to clean it and see what was inside. She tried to open the box,
+but it was locked. She asked her mom for help, but her mom was
+busy. So, Lily decided to try
+
+[tinyinfer] 100 tokens in 0.17s (606 tok/s, int8, TinyStories-15M)
+
+$ ./build/tinyinfer bench "Once upon a time" --max-tokens 128 --skip-naive
+
+[tinyinfer bench] prompt_tokens=4 max_tokens=128 greedy
+mode    generated  ttft(s)   decode(s)  tok/s
+cached  128        0.0412     0.4617     277.2
