@@ -189,3 +189,35 @@ Interview prep gold — "walk me through a hard bug" lives here.
   merge selection. Our CLI `prompt` path is fine (short prompts), but long-
   document ingestion would need this. Good interview talking point: "I know
   exactly where my tokenizer is slow and why."
+
+### 2026-09-27 — Phase 8: the AVX2 kernel was compute-bound (4x unroll, 1.6x gain)
+- **What:** final benchmarks vs llama.cpp showed 15M at 100% but 1.1B at only
+  47% (3.4 vs 7.3 tok/s). Bandwidth math didn't add up: llama.cpp's 7.3 tok/s
+  implies ~31GB/s effective, while I measured ~14GB/s — so my kernel wasn't
+  saturating the bus, it was the bottleneck.
+- **Root cause:** `dot_avx2` used a single accumulator (`acc = fmadd(..., acc)`),
+  a loop-carried dependency chain. FMA latency is 4-5 cycles, so one chain
+  delivers ~4 flops/cycle vs ~32 peak — the kernel was latency-bound, never
+  feeding the memory system fast enough.
+- **Fix:** 4 independent accumulators, 32 floats/iter unroll. Trivial diff.
+- **Numbers:** 1.1B 3.4 -> **5.6 tok/s (1.64x)**; 15M 297 -> **400 tok/s**.
+  vs llama.cpp: 15M **135%**, 1.1B **76%**.
+- **Lesson:** "bandwidth-bound" is a claim you verify by measuring achieved
+  bandwidth, not by assuming. The comparison against llama.cpp is what caught
+  it — without a reference, 3.4 tok/s would have looked like "the hardware
+  limit." This is exactly why the project plan demanded an honest reference
+  benchmark.
+
+### 2026-09-27 — Phase 8 final: honest numbers vs llama.cpp
+- Final (median of 3, 15-token prompt, 128 gen, 2-core AVX2 VM, llama.cpp 2b129cc):
+  15M tinyinfer fp32 276 tok/s vs llama.cpp 274 (**101%**); int8 **606 (2.19x)**;
+  1.1B tinyinfer fp32 5.1 vs llama.cpp 6.9 (**74%**).
+- Perplexity WikiText-2 (19,999 tokens): fp32 6260.2, int8 6199.8 (-1.0%, noise).
+- The int8 story only became real after the accumulator unroll: before it, int8
+  was 1.1x (compute-bound on widening); after, 2.19x (bandwidth wins).
+- Remaining 1.1B gap (26%) is un-investigated kernel micro-optimization
+  (cache blocking, blocked int accumulation); left as documented future work
+  rather than claimed.
+- Benchmark hygiene notes: (1) never benchmark while another model process runs
+  — cost me three contaminated runs; (2) median-of-3 with interleaved configs;
+  (3) short runs (<0.5s decode) show +/-20% turbo noise, use >=128 tokens.
