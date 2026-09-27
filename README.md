@@ -9,7 +9,7 @@
 
 ![demo](bench/demo.gif)
 
-**▶ [Interactive demo](https://muse.ai/s/tinyinfer-demo-sxn6p2rbxdxb3xy)** — a guided tour with a
+**▶ [Interactive demo](https://seampm.github.io/tinyinfer/)** — a guided tour with a
 live terminal replay, benchmark charts, and architecture walkthrough. No setup required.
 
 ## Highlights
