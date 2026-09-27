@@ -89,6 +89,13 @@ void LlamaModel::forward(int token, int pos, float* logits_out) {
     forward_debug(token, pos, logits_out, unused);
 }
 
+void LlamaModel::forward_full(const int* tokens, int n, float* logits_out) {
+    if (n <= 0) throw std::invalid_argument("model: forward_full needs n > 0");
+    reset();
+    std::vector<std::vector<float>> unused;
+    for (int p = 0; p < n; ++p) forward_debug(tokens[p], p, logits_out, unused);
+}
+
 void LlamaModel::forward_debug(int token, int pos, float* logits_out,
                                std::vector<std::vector<float>>& layer_outs) {
     if (!loaded_) throw std::runtime_error("model: not loaded");
