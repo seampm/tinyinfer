@@ -23,10 +23,20 @@ void matvec_scalar(const float* W, const float* x, float* out, int rows, int col
 #ifdef __AVX2__
 // FMA dot product, 8 floats per iteration; tail handled scalar.
 static float dot_avx2(const float* a, const float* b, int n) {
-    __m256 acc = _mm256_setzero_ps();
+    // 4 independent accumulators to hide FMA latency (4-5 cycles);
+    // a single chain caps throughput at ~1/8 of peak.
+    __m256 acc0 = _mm256_setzero_ps(), acc1 = _mm256_setzero_ps();
+    __m256 acc2 = _mm256_setzero_ps(), acc3 = _mm256_setzero_ps();
     int j = 0;
+    for (; j + 32 <= n; j += 32) {
+        acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(a + j), _mm256_loadu_ps(b + j), acc0);
+        acc1 = _mm256_fmadd_ps(_mm256_loadu_ps(a + j + 8), _mm256_loadu_ps(b + j + 8), acc1);
+        acc2 = _mm256_fmadd_ps(_mm256_loadu_ps(a + j + 16), _mm256_loadu_ps(b + j + 16), acc2);
+        acc3 = _mm256_fmadd_ps(_mm256_loadu_ps(a + j + 24), _mm256_loadu_ps(b + j + 24), acc3);
+    }
     for (; j + 8 <= n; j += 8)
-        acc = _mm256_fmadd_ps(_mm256_loadu_ps(a + j), _mm256_loadu_ps(b + j), acc);
+        acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(a + j), _mm256_loadu_ps(b + j), acc0);
+    __m256 acc = _mm256_add_ps(_mm256_add_ps(acc0, acc1), _mm256_add_ps(acc2, acc3));
     __m128 lo = _mm256_castps256_ps128(acc);
     __m128 hi = _mm256_extractf128_ps(acc, 1);
     __m128 s = _mm_add_ps(lo, hi);
@@ -74,15 +84,38 @@ void matvec_i8(const int8_t* Wq, const float* scale, const float* x, float* out,
         const int8_t* row = Wq + static_cast<size_t>(i) * cols;
         float dot = 0.0f;
 #ifdef __AVX2__
-        __m256 acc = _mm256_setzero_ps();
+        // 4 accumulators to hide FMA/convert latency (same lesson as dot_avx2).
+        __m256 acc0 = _mm256_setzero_ps(), acc1 = _mm256_setzero_ps();
+        __m256 acc2 = _mm256_setzero_ps(), acc3 = _mm256_setzero_ps();
         int j = 0;
+        for (; j + 32 <= cols; j += 32) {
+            __m128i b8;
+            b8 = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(row + j));
+            acc0 = _mm256_fmadd_ps(
+                _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm_cvtepi8_epi16(b8))),
+                _mm256_loadu_ps(x + j), acc0);
+            b8 = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(row + j + 8));
+            acc1 = _mm256_fmadd_ps(
+                _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm_cvtepi8_epi16(b8))),
+                _mm256_loadu_ps(x + j + 8), acc1);
+            b8 = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(row + j + 16));
+            acc2 = _mm256_fmadd_ps(
+                _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm_cvtepi8_epi16(b8))),
+                _mm256_loadu_ps(x + j + 16), acc2);
+            b8 = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(row + j + 24));
+            acc3 = _mm256_fmadd_ps(
+                _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm_cvtepi8_epi16(b8))),
+                _mm256_loadu_ps(x + j + 24), acc3);
+        }
         for (; j + 8 <= cols; j += 8) {
             // 8x int8 -> int16 -> int32 -> fp32, FMA with x
             __m128i b8 = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(row + j));
             __m256 f =
                 _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm_cvtepi8_epi16(b8)));
-            acc = _mm256_fmadd_ps(f, _mm256_loadu_ps(x + j), acc);
+            acc0 = _mm256_fmadd_ps(f, _mm256_loadu_ps(x + j), acc0);
         }
+        __m256 acc = _mm256_add_ps(_mm256_add_ps(acc0, acc1),
+                                   _mm256_add_ps(acc2, acc3));
         __m128 lo = _mm256_castps256_ps128(acc);
         __m128 hi = _mm256_extractf128_ps(acc, 1);
         __m128 s = _mm_add_ps(lo, hi);
