@@ -6,9 +6,13 @@ outputs to disk. This is the answer key for the C++ engine:
 when C++ output disagrees, diff layer-by-layer to find the bug.
 
 Usage:
-    pip install transformers torch safetensors
+    pip install -r scripts/requirements.txt
     python scripts/reference.py --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
         --prompt "Once upon a time" --out reference_outputs/
+
+Quick validation without downloading 2GB (tiny random Llama):
+    python scripts/reference.py --model hf-internal-testing/tiny-random-LlamaForCausalLM \
+        --prompt "Once upon a time" --out /tmp/ref_test
 """
 import argparse
 import json
@@ -27,9 +31,15 @@ def main():
 
     os.makedirs(args.out, exist_ok=True)
     tok = AutoTokenizer.from_pretrained(args.model)
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model, torch_dtype=torch.float32, low_cpu_mem_usage=True
-    )
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model, dtype=torch.float32, low_cpu_mem_usage=True
+        )
+    except TypeError:
+        # older transformers: dtype was torch_dtype
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model, torch_dtype=torch.float32, low_cpu_mem_usage=True
+        )
     model.eval()
 
     inputs = tok(args.prompt, return_tensors="pt")
