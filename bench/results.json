@@ -1,0 +1,11 @@
+{
+  "prompt": "Once upon a time, there was a little girl named Lily.",
+  "prompt_tokens": 15,
+  "gen_tokens": 128,
+  "reps": 3,
+  "tinyinfer_15m_f32": 276.166,
+  "tinyinfer_15m_i8": 605.769,
+  "llamacpp_15m_f32": 273.86,
+  "tinyinfer_1.1b_f32": 5.12003,
+  "llamacpp_1.1b_f32": 6.91
+}
