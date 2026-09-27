@@ -22,3 +22,14 @@ Interview prep gold — "walk me through a hard bug" lives here.
 - **Gotcha:** This sandbox's NO_PROXY env var is malformed (truncated IPv6 entry) which breaks Python urllib proxy parsing ("Invalid port: ':1]'"). Workaround: override NO_PROXY/no_proxy to "localhost,127.0.0.1,::1" when running. Not an issue on a normal machine.
 - **Gotcha 2:** transformers 5.x renamed torch_dtype -> dtype. Script now tries dtype first, falls back to torch_dtype.
 - **Lesson:** push_files.py now handles updates (must send existing sha), and GitHub workflow files need the token's `workflow` scope.
+
+### 2026-09-27 — Phase 2 safetensors loader
+- **What:** Hand-rolled loader: 8-byte LE header length, nlohmann/json for the
+  header dict, whole-file mmap (PROT_READ/MAP_PRIVATE), per-tensor offset
+  validation (byte range == numel * dtype_size), zero-copy views into mapping.
+- **Result:** 8/8 new tests pass; C++ values match Python-generated fixture exactly.
+- **Decisions:** nlohmann/json via FetchContent (same pattern as GoogleTest) —
+  the format framing/offsets/mmap are still hand-written; JSON lib is just the
+  header dict. F32-first; F16/BF16 parse but kernels come in Phase 3/7.
+- **Gotcha:** push_files.py needed the existing blob sha for updates (422
+  without it) — fixed.
