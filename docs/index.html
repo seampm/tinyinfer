@@ -71,7 +71,6 @@
   @media(max-width:700px){.grid2{grid-template-columns:1fr}.hero h1{font-size:32px}}
   .card{background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:20px}
   .card h3{font-size:16px; margin-bottom:8px}
-  .card h3 .n{color:var(--purple); font-family:ui-monospace,Menlo,monospace; margin-right:8px}
   .card p{color:var(--dim); font-size:14px}
   .card code{color:var(--blue); font-size:13px}
   pre.code{background:#010409; border:1px solid var(--border); border-radius:10px; padding:18px;
@@ -144,8 +143,8 @@
   </table>
   <div class="fig"><img src="assets/throughput.png" alt="tinyinfer vs llama.cpp decode throughput">
     <figcaption>Decode throughput: tinyinfer vs llama.cpp</figcaption></div>
-  <div class="fig"><img src="assets/journey.png" alt="Optimization journey 67 to 606 tok/s">
-    <figcaption>The optimization journey: scalar → AVX2 → int8</figcaption></div>
+  <div class="fig"><img src="assets/journey.png" alt="Throughput from 67 to 606 tok/s">
+    <figcaption>Throughput gains from vectorization and quantization</figcaption></div>
   <div class="grid2">
     <div class="card"><h3>Perplexity (WikiText-2)</h3>
       <p>fp32 PPL <code>6260.2</code> → int8 PPL <code>6199.8</code> (−1.0%, noise).
@@ -176,13 +175,13 @@ token ids ──► embedding lookup ──────────────�
     ▲
     └── KV cache: keys/values appended per position, never recomputed</div>
   <div class="grid2">
-    <div class="card"><h3><span class="n">01</span>Load</h3>
+    <div class="card"><h3>Loading</h3>
       <p>Hand-written safetensors parser over <code>mmap</code> — near-instant startup, zero dependencies.</p></div>
-    <div class="card"><h3><span class="n">02</span>Quantize</h3>
+    <div class="card"><h3>Quantization</h3>
       <p>Per-row symmetric int8 at load time. Weights shrink 4×; the AVX2 kernel widens on the fly.</p></div>
-    <div class="card"><h3><span class="n">03</span>Compute</h3>
+    <div class="card"><h3>Compute</h3>
       <p>Hand-written AVX2/FMA matvec with 4-way unrolled accumulators. OpenMP only on the 32k-row lm_head — threading smaller mats measured <i>slower</i>.</p></div>
-    <div class="card"><h3><span class="n">04</span>Verify</h3>
+    <div class="card"><h3>Verification</h3>
       <p>Every kernel has a scalar reference + differential test vs NumPy/HF before optimization. The fast path never diverges from the tested path.</p></div>
   </div>
 </section>
@@ -213,7 +212,7 @@ token ids ──► embedding lookup ──────────────�
 </section>
 
 <section>
-  <h2>Tradeoffs &amp; next steps</h2>
+  <h2>Tradeoffs &amp; future work</h2>
   <div class="grid2">
     <div class="card"><h3>Shipped</h3><p>Honest int8 instead of half-done int4 · OpenMP only where it wins ·
     mmap weights · correctness before speed, always measured.</p></div>

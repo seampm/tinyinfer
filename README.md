@@ -73,11 +73,11 @@ llama.cpp at rev `2b129cc`, F32 GGUF, `llama-bench -p 15 -n 128`.
 
 ![throughput](bench/charts/throughput.png)
 
-### Optimization journey (15M decode tok/s)
+### Optimization results (15M decode tok/s)
 
-| stage | tok/s |
+| configuration | tok/s |
 |---|---|
-| scalar fp32, KV cache (Phase 6) | 67 |
+| scalar fp32, KV cache | 67 |
 | + AVX2/FMA, 4-way unrolled accumulators | 276 |
 | + per-row int8 quantization | 606 |
 
