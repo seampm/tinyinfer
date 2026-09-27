@@ -1,15 +1,14 @@
-$ ./build/tinyinfer prompt "Once upon a time, there was a little girl named Lily. She found a" --max-tokens 100 --quant i8
+$ ./build/tinyinfer prompt "Sam the sailor spotted a tiny island with a tall palm tree" --max-tokens 100 --quant i8
 
-Once upon a time, there was a little girl named Lily. She found a
-mysterious box in her backyard. She didn't know what was inside,
-but she was very curious. She opened the box and found a note
-that said "Do not open until the next day."
-Lily was very excited to find out what was in the box. She decided
-to clean it and see what was inside. She tried to open the box,
-but it was locked. She asked her mom for help, but her mom was
-busy. So, Lily decided to try
+Sam the sailor spotted a tiny island with a tall palm tree. He thought
+it looked very inviting and decided to go explore it.
+When he arrived at the island, he saw a big bird perched on the palm
+tree. The bird said to him, "Hello, Sam. I'm so glad to meet you".
+Sam replied, "I'm Sam. What's your name?".
+The bird said, "My name is Bob. I'm a very wise old bird. Would you
+like to come
 
-[tinyinfer] 100 tokens in 0.17s (606 tok/s, int8, TinyStories-15M)
+[tinyinfer] 100 tokens in 0.279804s (357.394 tok/s, int8, TinyStories-15M)
 
 $ ./build/tinyinfer bench "Once upon a time" --max-tokens 128 --skip-naive
 
