@@ -21,9 +21,11 @@ void print_usage(const char* prog) {
               << "  " << prog << " prompt \"text\" [--model DIR] [--max-tokens N]\n"
               << "           [--temperature T] [--top-k K] [--top-p P] [--seed S]\n"
               << "  " << prog << " tokenize \"text\" [--model DIR]\n"
+              << "  " << prog << " bench \"text\" [--model DIR] [--max-tokens N]\n"
               << "\nDefaults: --model models/tinyllama-15m --max-tokens 50\n"
               << "          --temperature 0.8 --top-k 40 --top-p 0.9 --seed 42\n"
-              << "temperature <= 0 means greedy.\n";
+              << "temperature <= 0 means greedy.\n"
+              << "bench: greedy generation with vs without KV cache; reports tok/s.\n";
 }
 
 struct Args {
@@ -56,7 +58,7 @@ bool parse_args(int argc, char** argv, Args& a) {
         else if (o == "--seed") { need(o.c_str(), v); a.sample.seed = std::stoull(v); }
         else { std::cerr << "unknown option: " << o << "\n"; return false; }
     }
-    return a.cmd == "prompt" || a.cmd == "tokenize";
+    return a.cmd == "prompt" || a.cmd == "tokenize" || a.cmd == "bench";
 }
 
 int cmd_tokenize(const Args& a) {
@@ -118,6 +120,86 @@ int cmd_prompt(const Args& a) {
     return 0;
 }
 
+// Phase 6: benchmark cached (incremental forward) vs naive (forward_full per
+// token, recomputing all K/V) generation. Greedy in both modes; the token
+// streams must be identical, so this also stress-tests the KV cache.
+int cmd_bench(const Args& a) {
+    tinyinfer::LlamaModel model;
+    model.load(a.model_dir + "/model.safetensors", a.model_dir + "/config.json");
+    tinyinfer::Tokenizer tok;
+    tok.load(a.model_dir + "/tokenizer.json");
+    const int vocab = model.config().vocab_size;
+
+    std::vector<int> prompt = tok.encode(a.text, true); // + bos
+    const int max_seq = model.config().max_seq_len;
+    if (static_cast<int>(prompt.size()) + a.max_tokens > max_seq) {
+        std::cerr << "error: prompt (" << prompt.size() << " tokens) + max-tokens ("
+                  << a.max_tokens << ") exceeds max_seq_len (" << max_seq << ")\n";
+        return 1;
+    }
+
+    tinyinfer::SampleConfig greedy; // temperature 0 -> argmax
+    greedy.temperature = 0.0f;
+    std::vector<float> logits(vocab);
+
+    struct Run {
+        std::vector<int> gen;
+        double ttft = 0;   // seconds to first sampled token (incl. prompt)
+        double decode = 0; // seconds from first to last sampled token
+    };
+    auto run = [&](bool use_cache) {
+        Run r;
+        std::mt19937_64 rng(1234); // same draws both modes (greedy: unused)
+        std::vector<int> ids = prompt;
+        auto t0 = std::chrono::steady_clock::now();
+        if (use_cache) {
+            model.reset();
+            for (int p = 0; p < static_cast<int>(ids.size()); ++p)
+                model.forward(ids[p], p, logits.data());
+        } else {
+            model.forward_full(ids.data(), static_cast<int>(ids.size()), logits.data());
+        }
+        for (int step = 0; step < a.max_tokens; ++step) {
+            int next =
+                tinyinfer::sample_token(logits.data(), vocab, greedy, rng);
+            auto t_now = std::chrono::steady_clock::now();
+            if (step == 0)
+                r.ttft = std::chrono::duration<double>(t_now - t0).count();
+            if (next == tok.eos_id()) break;
+            r.gen.push_back(next);
+            ids.push_back(next);
+            const int pos = static_cast<int>(ids.size()) - 1;
+            if (use_cache)
+                model.forward(next, pos, logits.data());
+            else
+                model.forward_full(ids.data(), static_cast<int>(ids.size()),
+                                   logits.data());
+        }
+        auto t1 = std::chrono::steady_clock::now();
+        r.decode = std::chrono::duration<double>(t1 - t0).count() - r.ttft;
+        return r;
+    };
+
+    Run cached = run(true);
+    Run naive = run(false);
+
+    const bool identical = cached.gen == naive.gen;
+    auto tps = [](const Run& r) {
+        return r.decode > 0 ? r.gen.size() / r.decode : 0.0;
+    };
+    std::cout << "[tinyinfer bench] prompt_tokens=" << prompt.size()
+              << " max_tokens=" << a.max_tokens << " greedy\n";
+    std::cout << "mode    generated  ttft(s)   decode(s)  tok/s\n";
+    std::cout << "cached  " << cached.gen.size() << "         " << cached.ttft << "  "
+              << cached.decode << "  " << tps(cached) << "\n";
+    std::cout << "naive   " << naive.gen.size() << "         " << naive.ttft << "  "
+              << naive.decode << "  " << tps(naive) << "\n";
+    std::cout << "cache speedup: " << tps(cached) / tps(naive)
+              << "x; token streams identical: " << (identical ? "yes" : "NO") << "\n";
+    std::cout << "sample: " << tok.decode(cached.gen).substr(0, 120) << "\n";
+    return identical ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -128,6 +210,7 @@ int main(int argc, char** argv) {
     }
     try {
         if (a.cmd == "tokenize") return cmd_tokenize(a);
+        if (a.cmd == "bench") return cmd_bench(a);
         return cmd_prompt(a);
     } catch (const std::exception& e) {
         std::cerr << "error: " << e.what() << "\n";
