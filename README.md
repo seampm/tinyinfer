@@ -1,10 +1,31 @@
 # tinyinfer — LLM Inference Engine in C++
 
-A from-scratch inference engine for Llama-architecture models, written in C++20 with no ML frameworks and no copied code. Hand-rolled safetensors mmap loader, from-scratch BPE tokenizer, hand-written AVX2 kernels, per-row int8 quantization, and sampling — benchmarked honestly against llama.cpp.
-
-Built as a learning project: every optimization was measured before/after, and [DESIGN_LOG.md](DESIGN_LOG.md) records what helped, what didn't, and why.
+> **What am I looking at?** When you chat with an AI, an *inference engine* is the software
+> running the neural network and generating each word. **tinyinfer is one of those engines —
+> written entirely from scratch in C++**: no AI frameworks, no copied code. The file-format
+> parser, the tokenizer, the math kernels, and the quantization are all hand-built, and every
+> optimization was measured before/after ([DESIGN_LOG.md](DESIGN_LOG.md) records what helped,
+> what didn't, and why).
 
 ![demo](bench/demo.gif)
+
+**▶ [Interactive demo](https://muse.ai/s/tinyinfer-demo-sxn6p2rbxdxb3xy)** — a guided tour with a
+live terminal replay, benchmark charts, and architecture walkthrough. No setup required.
+
+## Highlights
+
+- **Hand-built, not assembled** — every component written from zero: safetensors file parser
+  over `mmap`, BPE tokenizer, AVX2/FMA vector math kernels, per-row int8 quantization.
+  Zero ML dependencies, ~1,700 lines of C++20.
+- **Benchmarked against the best** — measured head-to-head with [llama.cpp](https://github.com/ggerganov/llama.cpp),
+  the industry-standard open-source engine: **matches it** on a 15M-parameter model (101%),
+  reaches **74%** on a 1.1B model, with honest methodology published below.
+- **Found a real bug by benchmarking** — the comparison exposed that my vector math kernel was
+  limited by CPU instruction latency, not memory speed as assumed. Restructuring it gave an
+  instant 1.5× speedup — the kind of win you only get from measuring against a reference.
+- **Correctness proven, not claimed** — 42/42 tests pass; outputs match Hugging Face
+  layer-by-layer within 1e-4 and PyTorch token-for-token; quantization validated on WikiText-2
+  with no measurable quality loss (−1.0%, noise).
 
 ## What it does
 
