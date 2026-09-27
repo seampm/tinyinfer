@@ -11,13 +11,13 @@ OUT=bench/results.json
 
 ti_bench() { # model quant -> tok/s
   local qflag=""; [ "$2" = "i8" ] && qflag="--quant i8"
-  ./build/tinyinfer bench "$PROMPT" --max-tokens $N --model "models/$1" $qflag 2>/dev/null \
-    | awk 'NR==3{print $6}'
+  ./build/tinyinfer bench "$PROMPT" --max-tokens $N --skip-naive --model "models/$1" $qflag 2>/dev/null \
+    | awk 'NR==3{print $NF}'
 }
 
 lc_bench() { # gguf name -> tok/s (llama-bench tg column)
-  "$LLAMA/llama-bench" -m "models/gguf/$1.gguf" -p 8 -n $N 2>/dev/null \
-    | awk -F'|' 'NR==3{gsub(/ /,"",$4); print $4}'
+  "$LLAMA/llama-bench" -m "models/gguf/$1.gguf" -p 15 -n $N 2>/dev/null \
+    | awk -F'|' '$7 ~ /tg/ {gsub(/ /,"",$8); sub(/±.*/,"",$8); print $8}'
 }
 
 ti15_f32=$(ti_bench tinyllama-15m f32); echo "tinyinfer 15M f32: $ti15_f32"
@@ -29,7 +29,7 @@ lc11_f32=$(lc_bench tinyllama-1.1b-f32); echo "llama.cpp 1.1B f32: $lc11_f32"
 python3 - "$ti15_f32" "$ti15_i8" "$ti11_f32" "$lc15_f32" "$lc11_f32" << 'PYEOF'
 import json, sys
 r = {
-  "prompt_tokens": 8, "gen_tokens": 128,
+  "prompt_tokens": 15, "gen_tokens": 128,
   "tinyinfer_15m_f32": float(sys.argv[1]),
   "tinyinfer_15m_i8": float(sys.argv[2]),
   "tinyinfer_1.1b_f32": float(sys.argv[3]),
