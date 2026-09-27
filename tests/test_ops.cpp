@@ -73,8 +73,24 @@ TEST(Ops, Rope) {
                             -0.70667626f, -0.454781767f, -1.41442874f, -1.5143228f};
     const float kWantK[] = {-1.83886499f, -0.0899865006f, 1.27223251f, 2.9986501f,
                             -1.1311125f, 0.969554534f, -0.848872489f, 1.02954553f};
-    tinyinfer::rope(q, k, 2, 4, 3);
+    tinyinfer::rope(q, k, 2, 2, 4, 3);
     ExpectNear(q, kWantQ, 8);
+    ExpectNear(k, kWantK, 8);
+}
+
+TEST(Ops, RopeGqa) {
+    // n_q_heads=4, n_kv_heads=2: k must be indexed by kv-head, not q-head.
+    // (Regression test: the old signature corrupted the heap here.)
+    float q[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+    float k[] = {2, 0, -1, 3, 1, 1, 1, 1};
+    const float kWantQ[] = {-1.41335252f, 1.87911807f, -2.82885748f, 4.05819114f,
+                            -5.93780254f, 5.7573362f, -6.22434744f, 8.17637327f,
+                            -10.4622526f, 9.63555434f, -9.61983739f, 12.2945554f,
+                            -14.9867026f, 13.5137725f, -13.0153273f, 16.4127375f};
+    const float kWantK[] = {-1.83886499f, -0.0899865006f, 1.27223251f, 2.9986501f,
+                            -1.1311125f, 0.969554534f, -0.848872489f, 1.02954553f};
+    tinyinfer::rope(q, k, 4, 2, 4, 3);
+    ExpectNear(q, kWantQ, 16);
     ExpectNear(k, kWantK, 8);
 }
 
@@ -84,7 +100,7 @@ TEST(Ops, RopePreservesNorm) {
     float k[] = {0, 0, 0, 0, 0, 0, 0, 0};
     float before = 0;
     for (float v : q) before += v * v;
-    tinyinfer::rope(q, k, 2, 4, 7);
+    tinyinfer::rope(q, k, 2, 2, 4, 7);
     float after = 0;
     for (float v : q) after += v * v;
     EXPECT_NEAR(before, after, 1e-4f);
